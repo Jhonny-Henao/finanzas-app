@@ -19,7 +19,10 @@ import {
   ChevronRight,
 } from "lucide-react";
 
-import { getData, saveData } from "../lib/storage";
+import {
+  getData,
+  saveData,
+} from "../lib/storage";
 
 import {
   formatMoney,
@@ -35,9 +38,10 @@ export default function Dashboard() {
     savings: [],
   });
 
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] =
+    useState(false);
 
-  const [selectedAccount, setSelectedAccount] =
+  const [selectedAccountId, setSelectedAccountId] =
     useState(null);
 
   const [showCreate, setShowCreate] =
@@ -60,46 +64,97 @@ export default function Dashboard() {
 
   const accountsPerPage = 6;
 
-  useEffect(() => {
-    const saved = getData();
+  /*
+   * =====================================================
+   * CARGAR DATOS
+   * =====================================================
+   *
+   * IMPORTANTE:
+   * Aquí SOLO leemos localStorage.
+   *
+   * Ya NO tenemos un useEffect que automáticamente
+   * vuelva a guardar data después de cargarla.
+   *
+   * Así evitamos sobrescribir accidentalmente los
+   * datos existentes.
+   */
 
-    setData(saved);
+  useEffect(() => {
+    const savedData = getData();
+
+    setData(savedData);
     setLoaded(true);
   }, []);
 
-  useEffect(() => {
-    if (loaded) {
-      saveData(data);
-    }
-  }, [data, loaded]);
+  /*
+   * =====================================================
+   * CUENTA SELECCIONADA
+   * =====================================================
+   *
+   * Ya no guardamos toda la cuenta en otro estado.
+   *
+   * Solo guardamos su ID y buscamos la cuenta real
+   * dentro de data.accounts.
+   */
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [search]);
+  const selectedAccount = useMemo(() => {
+    if (!selectedAccountId) {
+      return null;
+    }
+
+    return (
+      data.accounts.find(
+        (account) =>
+          account.id ===
+          selectedAccountId
+      ) || null
+    );
+  }, [
+    data.accounts,
+    selectedAccountId,
+  ]);
+
+  /*
+   * =====================================================
+   * AHORROS TOTALES
+   * =====================================================
+   */
 
   const totalSavings = useMemo(() => {
     return data.savings.reduce(
       (total, item) =>
-        total + Number(item.amount),
+        total + Number(item.amount || 0),
       0
     );
   }, [data.savings]);
 
+  /*
+   * =====================================================
+   * BUSCADOR
+   * =====================================================
+   */
+
   const filteredAccounts = useMemo(() => {
-    const searchValue = search
-      .trim()
-      .toLowerCase();
+    const searchValue =
+      search.trim().toLowerCase();
 
     if (!searchValue) {
       return data.accounts;
     }
 
-    return data.accounts.filter((account) =>
-      account.name
-        .toLowerCase()
-        .includes(searchValue)
+    return data.accounts.filter(
+      (account) =>
+        account.name
+          .toLowerCase()
+          .includes(searchValue)
     );
   }, [data.accounts, search]);
+
+  /*
+   * =====================================================
+   * PAGINACIÓN
+   * =====================================================
+   */
 
   const totalPages = Math.ceil(
     filteredAccounts.length /
@@ -114,6 +169,28 @@ export default function Dashboard() {
         accountsPerPage
     );
 
+  useEffect(() => {
+    if (
+      totalPages > 0 &&
+      currentPage > totalPages
+    ) {
+      setCurrentPage(totalPages);
+    }
+  }, [
+    currentPage,
+    totalPages,
+  ]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search]);
+
+  /*
+   * =====================================================
+   * CREAR CUENTA
+   * =====================================================
+   */
+
   function createAccount(e) {
     e.preventDefault();
 
@@ -122,36 +199,63 @@ export default function Dashboard() {
 
     if (
       !accountName.trim() ||
-      !numericIncome
+      numericIncome <= 0
     ) {
       return;
     }
 
     const newAccount = {
       id: crypto.randomUUID(),
+
       name: accountName.trim(),
+
       income: numericIncome,
+
       date: new Date().toLocaleDateString(
         "es-CO"
       ),
+
       transactions: [],
+
       createdAt:
         new Date().toISOString(),
     };
 
-    setData((prev) => ({
-      ...prev,
+    const newData = {
+      ...data,
 
       accounts: [
         newAccount,
-        ...prev.accounts,
+        ...data.accounts,
       ],
-    }));
+    };
+
+    /*
+     * GUARDAMOS INMEDIATAMENTE
+     */
+
+    const saved = saveData(newData);
+
+    if (!saved) {
+      alert(
+        "No se pudo guardar la cuenta. Revisa el almacenamiento de tu navegador."
+      );
+
+      return;
+    }
+
+    setData(newData);
 
     setAccountName("");
     setIncome("");
     setShowCreate(false);
   }
+
+  /*
+   * =====================================================
+   * ELIMINAR CUENTA
+   * =====================================================
+   */
 
   function deleteAccount(id) {
     const confirmDelete =
@@ -163,77 +267,152 @@ export default function Dashboard() {
       return;
     }
 
-    setData((prev) => ({
-      ...prev,
+    const accountToDelete =
+      data.accounts.find(
+        (account) =>
+          account.id === id
+      );
+
+    if (!accountToDelete) {
+      return;
+    }
+
+    /*
+     * Si eliminamos una cuenta también eliminamos
+     * sus ahorros del acumulado global.
+     */
+
+    const accountTransactionIds =
+      new Set(
+        accountToDelete.transactions
+          .filter(
+            (transaction) =>
+              transaction.type ===
+              "saving"
+          )
+          .map(
+            (transaction) =>
+              transaction.id
+          )
+      );
+
+    const newData = {
+      ...data,
 
       accounts:
-        prev.accounts.filter(
+        data.accounts.filter(
           (account) =>
             account.id !== id
         ),
-    }));
 
-    setSelectedAccount(null);
+      savings:
+        data.savings.filter(
+          (saving) =>
+            !accountTransactionIds.has(
+              saving.id
+            )
+        ),
+    };
+
+    const saved = saveData(newData);
+
+    if (!saved) {
+      alert(
+        "No se pudo eliminar la cuenta."
+      );
+
+      return;
+    }
+
+    setData(newData);
+
+    if (
+      selectedAccountId === id
+    ) {
+      setSelectedAccountId(null);
+    }
   }
 
-  function addTransaction(transaction) {
+  /*
+   * =====================================================
+   * AGREGAR MOVIMIENTO
+   * =====================================================
+   */
+
+  function addTransaction(
+    transaction
+  ) {
     if (!selectedAccount) {
       return;
     }
 
-    setData((prev) => {
-      const updatedAccounts =
-        prev.accounts.map(
-          (account) => {
-            if (
-              account.id !==
-              selectedAccount.id
-            ) {
-              return account;
-            }
-
-            return {
-              ...account,
-
-              transactions: [
-                transaction,
-                ...account.transactions,
-              ],
-            };
+    const updatedAccounts =
+      data.accounts.map(
+        (account) => {
+          if (
+            account.id !==
+            selectedAccount.id
+          ) {
+            return account;
           }
-        );
 
-      return {
-        ...prev,
+          return {
+            ...account,
 
-        accounts: updatedAccounts,
+            transactions: [
+              transaction,
+              ...(account.transactions ||
+                []),
+            ],
+          };
+        }
+      );
 
-        savings:
-          transaction.type === "saving"
-            ? [
-                ...prev.savings,
+    const newData = {
+      ...data,
 
-                {
-                  ...transaction,
-                  accountId:
-                    selectedAccount.id,
-                  accountName:
-                    selectedAccount.name,
-                },
-              ]
-            : prev.savings,
-      };
-    });
+      accounts: updatedAccounts,
 
-    setSelectedAccount((prev) => ({
-      ...prev,
+      savings:
+        transaction.type === "saving"
+          ? [
+              ...data.savings,
 
-      transactions: [
-        transaction,
-        ...prev.transactions,
-      ],
-    }));
+              {
+                ...transaction,
+
+                accountId:
+                  selectedAccount.id,
+
+                accountName:
+                  selectedAccount.name,
+              },
+            ]
+          : data.savings,
+    };
+
+    /*
+     * GUARDAR INMEDIATAMENTE
+     */
+
+    const saved = saveData(newData);
+
+    if (!saved) {
+      alert(
+        "No se pudo guardar el movimiento."
+      );
+
+      return;
+    }
+
+    setData(newData);
   }
+
+  /*
+   * =====================================================
+   * ELIMINAR MOVIMIENTO
+   * =====================================================
+   */
 
   function deleteTransaction(
     transactionId
@@ -252,54 +431,71 @@ export default function Dashboard() {
       return;
     }
 
-    setData((prev) => ({
-      ...prev,
-
-      accounts:
-        prev.accounts.map(
-          (account) =>
-            account.id ===
+    const updatedAccounts =
+      data.accounts.map(
+        (account) => {
+          if (
+            account.id !==
             selectedAccount.id
-              ? {
-                  ...account,
+          ) {
+            return account;
+          }
 
-                  transactions:
-                    account.transactions.filter(
-                      (item) =>
-                        item.id !==
-                        transactionId
-                    ),
-                }
-              : account
-        ),
+          return {
+            ...account,
+
+            transactions:
+              account.transactions.filter(
+                (item) =>
+                  item.id !==
+                  transactionId
+              ),
+          };
+        }
+      );
+
+    const newData = {
+      ...data,
+
+      accounts: updatedAccounts,
 
       savings:
         transaction.type === "saving"
-          ? prev.savings.filter(
+          ? data.savings.filter(
               (item) =>
                 item.id !==
                 transactionId
             )
-          : prev.savings,
-    }));
+          : data.savings,
+    };
 
-    setSelectedAccount((prev) => ({
-      ...prev,
+    const saved = saveData(newData);
 
-      transactions:
-        prev.transactions.filter(
-          (item) =>
-            item.id !==
-            transactionId
-        ),
-    }));
+    if (!saved) {
+      alert(
+        "No se pudo eliminar el movimiento."
+      );
+
+      return;
+    }
+
+    setData(newData);
   }
+
+  /*
+   * =====================================================
+   * CALCULAR CUENTA
+   * =====================================================
+   */
 
   function calculateAccount(
     account
   ) {
+    const transactions =
+      account.transactions || [];
+
     const expenses =
-      account.transactions
+      transactions
         .filter(
           (item) =>
             item.type ===
@@ -308,12 +504,12 @@ export default function Dashboard() {
         .reduce(
           (total, item) =>
             total +
-            Number(item.amount),
+            Number(item.amount || 0),
           0
         );
 
     const savings =
-      account.transactions
+      transactions
         .filter(
           (item) =>
             item.type ===
@@ -322,7 +518,7 @@ export default function Dashboard() {
         .reduce(
           (total, item) =>
             total +
-            Number(item.amount),
+            Number(item.amount || 0),
           0
         );
 
@@ -331,11 +527,17 @@ export default function Dashboard() {
       savings,
 
       balance:
-        Number(account.income) -
+        Number(account.income || 0) -
         expenses -
         savings,
     };
   }
+
+  /*
+   * =====================================================
+   * PANTALLA DE CARGA
+   * =====================================================
+   */
 
   if (!loaded) {
     return (
@@ -353,6 +555,12 @@ export default function Dashboard() {
     );
   }
 
+  /*
+   * =====================================================
+   * DETALLE DE CUENTA
+   * =====================================================
+   */
+
   if (selectedAccount) {
     const totals =
       calculateAccount(
@@ -367,7 +575,7 @@ export default function Dashboard() {
 
             <button
               onClick={() =>
-                setSelectedAccount(
+                setSelectedAccountId(
                   null
                 )
               }
@@ -393,6 +601,7 @@ export default function Dashboard() {
 
                   <p className="mt-1 flex items-center gap-1 text-sm text-slate-400">
                     <CalendarDays size={15} />
+
                     {selectedAccount.date}
                   </p>
 
@@ -407,6 +616,7 @@ export default function Dashboard() {
                   className="flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 font-bold text-white shadow-lg transition hover:-translate-y-0.5"
                 >
                   <Plus size={19} />
+
                   Agregar gasto
                 </button>
 
@@ -485,7 +695,7 @@ export default function Dashboard() {
 
               {selectedAccount
                 .transactions
-                .length === 0 ? (
+                ?.length === 0 ? (
 
                 <div className="rounded-2xl bg-slate-50 py-12 text-center">
 
@@ -593,6 +803,12 @@ export default function Dashboard() {
       </>
     );
   }
+
+  /*
+   * =====================================================
+   * DASHBOARD PRINCIPAL
+   * =====================================================
+   */
 
   return (
     <main className="min-h-screen pb-10">
@@ -839,8 +1055,10 @@ export default function Dashboard() {
                   <AccountCard
                     key={account.id}
                     account={account}
-                    onSelect={
-                      setSelectedAccount
+                    onSelect={() =>
+                      setSelectedAccountId(
+                        account.id
+                      )
                     }
                     onDelete={
                       deleteAccount
@@ -976,6 +1194,12 @@ export default function Dashboard() {
   );
 }
 
+/*
+ * =====================================================
+ * TARJETA DE ESTADÍSTICA
+ * =====================================================
+ */
+
 function StatCard({
   title,
   value,
@@ -1018,7 +1242,7 @@ function StatCard({
         }`}
       >
         $
-        {Number(value).toLocaleString(
+        {Number(value || 0).toLocaleString(
           "es-CO"
         )}
       </p>
@@ -1026,6 +1250,12 @@ function StatCard({
     </div>
   );
 }
+
+/*
+ * =====================================================
+ * MOVIMIENTO
+ * =====================================================
+ */
 
 function TransactionRow({
   transaction,
@@ -1085,7 +1315,7 @@ function TransactionRow({
         >
           -$
           {Number(
-            transaction.amount
+            transaction.amount || 0
           ).toLocaleString(
             "es-CO"
           )}
@@ -1111,6 +1341,12 @@ function TransactionRow({
     </div>
   );
 }
+
+/*
+ * =====================================================
+ * MODAL CREAR CUENTA
+ * =====================================================
+ */
 
 function CreateAccountModal({
   accountName,
